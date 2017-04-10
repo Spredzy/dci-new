@@ -1,3 +1,83 @@
 ---
-- name: Echo new
-  shell: echo 'new'
+- name: Ensure httpd is installed
+  package:
+    name: httpd
+  become: true
+
+- name: Ensure httpd is running
+  service:
+    name: httpd
+    state: started
+    enabled: yes
+  become: true
+
+- name: Ensure the repository directory exist
+  file:
+    path: '{{ local_repo_dir }}'
+    state: directory
+  become: true
+
+
+- name: Ensure python-firewall is installed
+  package:
+    name: python-firewall
+  become: true
+
+- name: Allow HTTP from nodes that will install the components
+  firewalld:
+    source: '{{ undercloud_ip }}'
+    port: 80/tcp
+    permanent: true
+    immediate: yes
+    state: enabled
+  become: true
+  ignore_errors: True
+
+
+- name: Check for existing component file
+  stat:
+    path: '{{ local_repo_dir }}/{{ item["id"] }}.tar'
+  with_items: '{{ job_informations["components"] }}'
+  register: components
+  become: true
+
+- name: Retrieve component
+  dci_component:
+    dci_login: '{{ dci_login }}'
+    dci_password: '{{ dci_password }}'
+    id: '{{ item.item["id"] }}'
+    dest: '{{ local_repo_dir }}/{{ item.item["id"] }}.tar'
+  with_items: '{{ components.results }}'
+  when: not item.stat.exists
+  become: true
+
+- name: Ensure proper directories are created
+  file:
+    path: '{{ local_repo_dir }}/{{ job_informations["job_id"] }}'
+    state: directory
+  become: true
+
+- name: Unarchive component
+  unarchive:
+    src: '{{ local_repo_dir }}/{{ item.item["id"] }}.tar'
+    dest: '{{ local_repo_dir }}/{{ job_informations["job_id"] }}'
+    remote_src: True
+  with_items: '{{ components.results }}'
+  become: true
+
+- name: Clean yum repo
+  file:
+    path: '{{ local_repo_dir }}/dci.repo'
+    state: absent
+  become: true
+
+- name: Create yum repo
+  yum_repository:
+    name: '{{ item.item["canonical_project_name"] }}'
+    description: '{{ item.item["canonical_project_name"] }}'
+    baseurl: 'http://{{ local_repo_ip }}/dci/{{ job_informations["job_id"] }}/{{ item.item["canonical_project_name"] }}'
+    gpgcheck: no
+    enabled: yes
+    file: '{{ local_repo_dir }}/dci'
+  with_items: '{{ components.results }}'
+  become: true
